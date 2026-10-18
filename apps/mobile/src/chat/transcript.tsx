@@ -16,7 +16,9 @@ import {
   type MessagePart,
   type NoticePart,
   type Person,
+  drawnInWork,
   toolSummary,
+  workSummary,
 } from "@do-computer/protocol"
 import {
   type ComponentType,
@@ -289,16 +291,11 @@ function Notice({ part }: { part: NoticePart | undefined }) {
  * The agent's own working between two things it said, where it speaks only through `send`: one
  * line that says so, which opens on what it thought, the steps it took and what it was told.
  */
-function WorkRow({ message }: { message: ChatMessage }) {
-  const steps = message.parts.filter((part) => part.type === "tool").length
-  const label = [
-    message.status === "streaming" ? "Working on it" : "Worked on it",
-    steps === 0 ? undefined : steps === 1 ? "1 step" : `${steps} steps`,
-  ]
-    .filter((said) => said !== undefined)
-    .join(" · ")
+function WorkRow({ message, last, busy }: { message: ChatMessage; last: boolean; busy: boolean }) {
+  const { title, counts } = workSummary(message, last, busy)
+  const whole = textOf(message)
   return (
-    <Fold label={label}>
+    <Fold label={[title, ...counts].join(" · ")}>
       <View style={{ gap: 8 }}>
         {message.parts.map((part, index) =>
           part.type === "text" || part.type === "thinking" ? (
@@ -307,6 +304,9 @@ function WorkRow({ message }: { message: ChatMessage }) {
             </Text>
           ) : part.type === "notice" ? (
             <Notice key={index} part={part} />
+          ) : part.type === "tool" && drawnInWork(part) ? (
+            // What is drawn in a chat, such as a screen it used, is drawn here as it is there.
+            <AssistantPart key={part.toolCallId} part={part} whole={whole} />
           ) : part.type === "tool" ? (
             <Text key={part.toolCallId} variant="footnote" tone="ink3">
               {toolSummary(part)}
@@ -453,6 +453,9 @@ type RowProps = {
   asker: string | undefined
   /** For a message of the reader's: whether the agent has it. Undefined where that is not said. */
   delivery: "sent" | "delivered" | undefined
+  /** Whether it is the last message shown, and whether the agent is at work in the chat. */
+  last: boolean
+  busy: boolean
 }
 
 /** How long the word that a message was delivered stays before it leaves. */
@@ -524,8 +527,10 @@ const MessageRow = memo(function MessageRow({
   team,
   asker,
   delivery,
+  last,
+  busy,
 }: RowProps) {
-  if (message.work === true) return <WorkRow message={message} />
+  if (message.work === true) return <WorkRow message={message} last={last} busy={busy} />
   if (message.role === "notice") {
     const part = message.parts[0]
     return <Notice part={part?.type === "notice" ? part : undefined} />
@@ -619,6 +624,14 @@ const MessageRow = memo(function MessageRow({
           whole={whole}
         />
       ))}
+      {message.notSent === undefined ? null : (
+        // Its words were on screen as they were written; it says it did not go, and why.
+        <Marker icon="warning">
+          <Text variant="subhead" tone="red">
+            Not sent: {message.notSent}
+          </Text>
+        </Marker>
+      )}
       {message.status === "error" ? (
         <ReplyError error={message.error} failures={failures} onRetry={onRetry} />
       ) : null}
@@ -911,6 +924,8 @@ export function Transcript({
                 }
                 team={team}
                 asker={asker}
+                last={index === shown.length - 1}
+                busy={state.busy}
                 delivery={
                   undelivered?.has(message.id) === true
                     ? "sent"
